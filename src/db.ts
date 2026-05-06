@@ -53,7 +53,16 @@ const MIGRATIONS: string[] = [
 
 export function initDb(config: Config): Db {
   const dbPath = join(config.DATA_DIR, 'state.db');
-  mkdirSync(dirname(dbPath), { recursive: true });
+  try {
+    mkdirSync(dirname(dbPath), { recursive: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `Failed to create DATA_DIR (${config.DATA_DIR}): ${msg}\n` +
+        `Set DATA_DIR to an absolute, writable path. Under systemd this typically means /var/lib/opencode-slack-bot.`,
+    );
+    process.exit(1);
+  }
 
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');

@@ -1,6 +1,5 @@
 [Unit]
 Description=OpenCode Slack Bot
-Documentation=https://github.com/anthropics/claude-code
 After=network-online.target
 Wants=network-online.target
 
@@ -11,6 +10,7 @@ Group=opencode-bot
 WorkingDirectory=/opt/opencode-slack-bot
 
 # .env-style file with SLACK_*, ALLOWED_*, OPENCODE_BIN, DATA_DIR, etc.
+# DATA_DIR must be an absolute writable path (e.g. /var/lib/opencode-slack-bot).
 EnvironmentFile=/etc/opencode-slack-bot.env
 
 ExecStart=/usr/bin/node dist/index.js
@@ -28,13 +28,10 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=opencode-slack-bot
 
-# Hardening
+# Light hardening only. We deliberately do NOT use ProtectHome / ProtectSystem
+# because opencode runs against repos under the user's filesystem (often /root,
+# /home, or anywhere ALLOWED_REPOS points to), and those flags would block it.
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-# DATA_DIR (typically /var/lib/opencode-slack-bot) must be writable
-ReadWritePaths=/var/lib/opencode-slack-bot
 
 [Install]
 WantedBy=multi-user.target

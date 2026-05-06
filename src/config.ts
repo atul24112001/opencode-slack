@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { z } from 'zod';
 
 const csvSchema = z
@@ -21,7 +22,11 @@ const ConfigSchema = z.object({
   DEFAULT_REPO: z.string().min(1),
   DEFAULT_AGENT: z.string().min(1).default('general'),
 
-  DATA_DIR: z.string().min(1).default('./data'),
+  DATA_DIR: z
+    .string()
+    .min(1)
+    .default('./data')
+    .transform((s) => resolve(s)),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
   MAX_COST_PER_SESSION_USD: z.coerce.number().positive().default(1.0),
