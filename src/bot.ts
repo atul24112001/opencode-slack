@@ -1,27 +1,32 @@
 import bolt from '@slack/bolt';
 import type { Logger } from 'pino';
 import type { AuditWriter } from './audit.js';
+import type { BackgroundJobStore } from './backgroundJobs.js';
+import type { BookmarkStore } from './bookmarks.js';
 import { commands, parseSlashCommand } from './commands/index.js';
 import type { CommandContext } from './commands/index.js';
 import type { Config } from './config.js';
 import type { Db } from './db.js';
 import type { FileUploadClient } from './files.js';
 import type { OpencodeRunner, RunHandle } from './opencode.js';
+import type { ScheduledTaskStore } from './scheduledTasks.js';
 import type { SessionStore } from './sessions.js';
 import { createRunStream } from './streaming.js';
-import type { StreamingClient } from './streaming.js';
+import type { RunStream, StreamingClient } from './streaming.js';
 
 const { App, LogLevel } = bolt;
 
 const CANCEL_REACTION = 'x';
+const BOOKMARK_REACTION = 'pushpin';
 
 interface SlackClient {
   chat: {
     postMessage(args: {
       channel: string;
-      text: string;
+      text?: string;
+      blocks?: unknown[];
       thread_ts?: string;
-    }): Promise<{ ok?: boolean; ts?: string }>;
+    }): Promise<{ ok?: boolean; ts?: string; channel?: string }>;
     postEphemeral(args: {
       channel: string;
       user: string;
@@ -32,6 +37,25 @@ interface SlackClient {
       ts: string;
       text: string;
     }): Promise<unknown>;
+    getPermalink(args: {
+      channel: string;
+      message_ts: string;
+    }): Promise<{ ok?: boolean; permalink?: string }>;
+  };
+  conversations: {
+    open(args: {
+      users: string;
+    }): Promise<{ ok?: boolean; channel?: { id?: string } }>;
+    history(args: {
+      channel: string;
+      latest?: string;
+      oldest?: string;
+      inclusive?: boolean;
+      limit?: number;
+    }): Promise<{
+      ok?: boolean;
+      messages?: Array<{ text?: string; ts?: string }>;
+    }>;
   };
   files: FileUploadClient['files'];
 }
@@ -43,10 +67,29 @@ export interface BotDeps {
   runner: OpencodeRunner;
   sessions: SessionStore;
   audit: AuditWriter;
+  bookmarks: BookmarkStore;
+  scheduledTasks: ScheduledTaskStore;
+  backgroundJobs: BackgroundJobStore;
 }
 
-export function createBot(deps: BotDeps): bolt.App {
-  const { config, logger, runner, sessions, audit } = deps;
+export interface BotHandles {
+  app: bolt.App;
+  client: SlackClient;
+  runStream: RunStream;
+  activeStreams: Map<string, RunHandle>;
+}
+
+export function createBot(deps: BotDeps): BotHandles {
+  const {
+    config,
+    logger,
+    runner,
+    sessions,
+    audit,
+    bookmarks,
+    scheduledTasks,
+    backgroundJobs,
+  } = deps;
 
   const app = new App({
     token: config.SLACK_BOT_TOKEN,
@@ -182,8 +225,12 @@ export function createBot(deps: BotDeps): bolt.App {
     const ctx: CommandContext = {
       config,
       sessions,
+      bookmarks,
+      scheduledTasks,
+      backgroundJobs,
       userId: command.user_id,
       threadKey: slashThreadTs,
+      channel: command.channel_id,
     };
 
     let result;
@@ -204,21 +251,39 @@ export function createBot(deps: BotDeps): bolt.App {
     logger.info({ user: command.user_id, command: parsed.name }, 'slash');
 
     if (result.kind === 'text') {
+      await safePostMessage(client, {
+        channel: command.channel_id,
+        text: result.text,
+        ...(slashThreadTs ? { threadTs: slashThreadTs } : {}),
+        logger,
+      });
+      audit.log({
+        ts: Date.now(),
+        userId: command.user_id,
+        command: parsed.name,
+        repo: null,
+        exitCode: 0,
+        durationMs: 0,
+      });
+      return;
+    }
+
+    if (result.kind === 'blocks') {
       try {
         await client.chat.postMessage({
           channel: command.channel_id,
-          text: result.text,
+          text: result.fallback,
+          blocks: result.blocks,
           ...(slashThreadTs ? { thread_ts: slashThreadTs } : {}),
         });
       } catch (err) {
-        logger.error({ err }, 'postMessage for text result failed');
-        await safeEphemeral(
-          client,
-          command.channel_id,
-          command.user_id,
-          '❌ Failed to post response.',
+        logger.warn({ err }, 'postMessage with blocks failed');
+        await safePostMessage(client, {
+          channel: command.channel_id,
+          text: result.fallback,
+          ...(slashThreadTs ? { threadTs: slashThreadTs } : {}),
           logger,
-        );
+        });
       }
       audit.log({
         ts: Date.now(),
@@ -277,23 +342,77 @@ export function createBot(deps: BotDeps): bolt.App {
       repoOverride: result.repoPath ?? null,
       agentOverride: result.agent ?? null,
       modelOverride: result.model ?? null,
+      opencodeSessionIdOverride: result.opencodeSessionIdOverride ?? null,
     });
   });
 
   app.event('reaction_added', async ({ event }) => {
-    if (event.reaction !== CANCEL_REACTION) return;
     if (!isAllowed(event.user)) return;
     if (event.item.type !== 'message') return;
-    const handle = activeStreams.get(event.item.ts);
-    if (!handle) return;
-    logger.info(
-      { user: event.user, ts: event.item.ts },
-      'cancelling stream via ❌ reaction',
-    );
-    try {
-      await handle.cancel();
-    } catch (err) {
-      logger.warn({ err }, 'cancel threw');
+
+    if (event.reaction === CANCEL_REACTION) {
+      const handle = activeStreams.get(event.item.ts);
+      if (!handle) return;
+      logger.info(
+        { user: event.user, ts: event.item.ts },
+        'cancelling stream via ❌ reaction',
+      );
+      try {
+        await handle.cancel();
+      } catch (err) {
+        logger.warn({ err }, 'cancel threw');
+      }
+      return;
+    }
+
+    if (event.reaction === BOOKMARK_REACTION) {
+      if (bookmarks.exists(event.user, event.item.channel, event.item.ts))
+        return;
+
+      let snippet: string | null = null;
+      try {
+        const hist = await client.conversations.history({
+          channel: event.item.channel,
+          latest: event.item.ts,
+          oldest: event.item.ts,
+          inclusive: true,
+          limit: 1,
+        });
+        const text = hist.messages?.[0]?.text;
+        if (typeof text === 'string') snippet = text.slice(0, 500);
+      } catch (err) {
+        logger.debug({ err }, 'conversations.history for bookmark failed');
+      }
+
+      let permalink: string | null = null;
+      try {
+        const link = await client.chat.getPermalink({
+          channel: event.item.channel,
+          message_ts: event.item.ts,
+        });
+        if (link.permalink) permalink = link.permalink;
+      } catch (err) {
+        logger.debug({ err }, 'getPermalink for bookmark failed');
+      }
+
+      bookmarks.add({
+        userId: event.user,
+        channel: event.item.channel,
+        messageTs: event.item.ts,
+        snippet,
+        permalink,
+      });
+      logger.info(
+        { user: event.user, ts: event.item.ts },
+        'bookmarked message',
+      );
+      await safeEphemeral(
+        client,
+        event.item.channel,
+        event.user,
+        '📌 Bookmarked. View with `/oc bookmarks`.',
+        logger,
+      );
     }
   });
 
@@ -301,7 +420,7 @@ export function createBot(deps: BotDeps): bolt.App {
     logger.error({ err }, 'unhandled bolt error');
   });
 
-  return app;
+  return { app, client, runStream, activeStreams };
 }
 
 async function postInitial(
@@ -322,6 +441,21 @@ async function postInitial(
   } catch (err) {
     args.logger.error({ err, channel: args.channel }, 'postMessage failed');
     return null;
+  }
+}
+
+async function safePostMessage(
+  client: SlackClient,
+  args: { channel: string; text: string; threadTs?: string; logger: Logger },
+): Promise<void> {
+  try {
+    await client.chat.postMessage({
+      channel: args.channel,
+      text: args.text,
+      ...(args.threadTs ? { thread_ts: args.threadTs } : {}),
+    });
+  } catch (err) {
+    args.logger.warn({ err, channel: args.channel }, 'postMessage failed');
   }
 }
 

@@ -1,4 +1,7 @@
 import { agentCommand } from './agent.js';
+import { bgCommand } from './bg.js';
+import { bookmarksCommand } from './bookmarksCommand.js';
+import { continueCommand } from './continueCommand.js';
 import { costCommand } from './cost.js';
 import { exploreCommand } from './explore.js';
 import { buildHelpCommand } from './help.js';
@@ -7,6 +10,7 @@ import { planCommand } from './plan.js';
 import { qaCommand } from './qa.js';
 import { resetCommand } from './reset.js';
 import { reviewCommand } from './review.js';
+import { scheduleCommand } from './scheduleCommand.js';
 import { shipCommand } from './ship.js';
 import type { CommandHandler } from './types.js';
 
@@ -16,10 +20,14 @@ const baseCommands: Record<string, CommandHandler> = {
   ship: shipCommand,
   explore: exploreCommand,
   plan: planCommand,
+  bg: bgCommand,
+  continue: continueCommand,
   model: modelCommand,
   agent: agentCommand,
   cost: costCommand,
   reset: resetCommand,
+  schedule: scheduleCommand,
+  bookmarks: bookmarksCommand,
 };
 
 export const commands: Record<string, CommandHandler> = {

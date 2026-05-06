@@ -5,7 +5,7 @@ import type { Config } from './config.js';
 
 export type Db = Database.Database;
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const MIGRATIONS: string[] = [
   // v1 — original schema. FROZEN: edit by adding a new migration below.
@@ -48,6 +48,61 @@ const MIGRATIONS: string[] = [
 
   CREATE INDEX IF NOT EXISTS idx_sessions_user
     ON sessions(user_id);
+  `,
+
+  // v3 — meta kv, bookmarks, background_jobs, scheduled_tasks.
+  `
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS bookmarks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL,
+    channel     TEXT    NOT NULL,
+    message_ts  TEXT    NOT NULL,
+    snippet     TEXT,
+    permalink   TEXT,
+    created_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_bookmarks_user
+    ON bookmarks(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS background_jobs (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id            TEXT    NOT NULL,
+    initiating_channel TEXT    NOT NULL,
+    initiating_ts      TEXT    NOT NULL,
+    prompt             TEXT    NOT NULL,
+    agent              TEXT,
+    repo_path          TEXT,
+    status             TEXT    NOT NULL DEFAULT 'pending',
+    created_at         INTEGER NOT NULL,
+    started_at         INTEGER,
+    completed_at       INTEGER,
+    result_text        TEXT,
+    exit_code          INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_bg_status
+    ON background_jobs(status, created_at);
+
+  CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           TEXT    NOT NULL,
+    channel           TEXT    NOT NULL,
+    schedule_kind     TEXT    NOT NULL,
+    schedule_hour     INTEGER,
+    schedule_minute   INTEGER,
+    schedule_weekday  INTEGER,
+    command_text      TEXT    NOT NULL,
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    last_run_at       INTEGER,
+    next_run_at       INTEGER NOT NULL,
+    created_at        INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_sched_next
+    ON scheduled_tasks(enabled, next_run_at);
   `,
 ];
 

@@ -10,7 +10,13 @@ export interface SessionStore {
   ): Session;
   delete(threadTs: string): boolean;
 
+  getMostRecentForUser(userId: string): Session | undefined;
   costForUserSinceMs(userId: string, sinceMs: number): { tokens: number; costUsd: number };
+  costForUserBetween(
+    userId: string,
+    startMs: number,
+    endMs: number,
+  ): { tokens: number; costUsd: number };
   costForAllSinceMs(sinceMs: number): { tokens: number; costUsd: number };
   pruneOlderThanMs(cutoffMs: number): number;
 }
@@ -69,10 +75,24 @@ export function createSqliteSessionStore(db: Db): SessionStore {
      FROM sessions
      WHERE user_id = ? AND last_active_at >= ?`,
   );
+  const costUserBetweenStmt = db.prepare<
+    [string, number, number],
+    { tokens: number | null; cost: number | null }
+  >(
+    `SELECT SUM(total_tokens) AS tokens, SUM(total_cost_usd) AS cost
+     FROM sessions
+     WHERE user_id = ? AND last_active_at >= ? AND last_active_at < ?`,
+  );
   const costAllStmt = db.prepare<[number], { tokens: number | null; cost: number | null }>(
     `SELECT SUM(total_tokens) AS tokens, SUM(total_cost_usd) AS cost
      FROM sessions
      WHERE last_active_at >= ?`,
+  );
+  const recentForUserStmt = db.prepare<[string], SessionRow>(
+    `SELECT * FROM sessions
+     WHERE user_id = ?
+     ORDER BY last_active_at DESC
+     LIMIT 1`,
   );
   const pruneStmt = db.prepare<[number]>(
     `DELETE FROM sessions WHERE last_active_at < ?`,
@@ -111,8 +131,19 @@ export function createSqliteSessionStore(db: Db): SessionStore {
       const info = deleteStmt.run(threadTs);
       return info.changes > 0;
     },
+    getMostRecentForUser(userId) {
+      const row = recentForUserStmt.get(userId);
+      return row ? rowToSession(row) : undefined;
+    },
     costForUserSinceMs(userId, sinceMs) {
       const row = costUserStmt.get(userId, sinceMs);
+      return {
+        tokens: row?.tokens ?? 0,
+        costUsd: row?.cost ?? 0,
+      };
+    },
+    costForUserBetween(userId, startMs, endMs) {
+      const row = costUserBetweenStmt.get(userId, startMs, endMs);
       return {
         tokens: row?.tokens ?? 0,
         costUsd: row?.cost ?? 0,

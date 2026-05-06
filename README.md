@@ -4,12 +4,18 @@ A custom Slack ↔ [OpenCode](https://opencode.ai) bot. Replaces `Soyuz0/opencod
 
 What it does:
 
-- Streams opencode responses into a Slack thread (one message, edited every ~1s)
-- Slash commands: `/oc review <PR>`, `/oc qa <file>`, `/oc ship <task>`, `/oc explore`, `/oc plan`, `/oc model`, `/oc agent`, `/oc cost`, `/oc reset`, `/oc help`
+- Streams opencode responses into a Slack thread (one message, edited every ~1s) with tool-icon glyphs (🔧📖✏️🔍🌐) and Slack-mrkdwn formatting
+- Slash commands:
+  - **Run opencode:** `/oc review <PR>`, `/oc qa <file>`, `/oc ship [--plan-only] <task>`, `/oc explore`, `/oc plan`, `/oc bg <prompt>` (background, DM result)
+  - **Session:** `/oc continue <prompt>` (resume most recent), `/oc model`, `/oc agent`, `/oc cost`, `/oc reset`
+  - **Other:** `/oc schedule daily 9am ...` (also `list` / `remove <id>`), `/oc bookmarks`, `/oc help` (Block Kit)
 - Free-form DMs run with the default agent
 - React ❌ on a running message → cancels the subprocess (best-effort, no rollback)
+- React 📌 on any bot message → saves it to `/oc bookmarks` (with permalink + snippet)
 - Long output uploads as a `.md` file instead of truncating
-- SQLite-backed sessions survive restart; daily prune of rows older than 30d
+- SQLite-backed sessions survive restart; backup-on-shutdown to `state.db.backup`; daily prune of rows older than 30d
+- Background jobs (`/oc bg`) and scheduled tasks (`/oc schedule`) — fire on a built-in worker, no separate process
+- Daily cost digest DM at 09:00 UTC summarising yesterday's usage
 - Per-thread cost cap; per-user / per-workspace cost rollups via `/oc cost`
 - Allowlist auth (`ALLOWED_USERS`) and repo allowlist (`ALLOWED_REPOS`)
 
@@ -24,6 +30,7 @@ What it does:
    - `files:write`
    - `im:history`, `im:read`, `im:write`
    - `reactions:read`
+   - **For `/oc bookmarks` previews on public channels (optional):** `channels:history`. Without it, the bot still bookmarks the message ts + permalink — only the inline preview text is missing.
 4. **Event Subscriptions** → enable, then subscribe to bot events:
    - `app_mention`
    - `message.im`
@@ -105,6 +112,37 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now opencode-slack-bot
 sudo journalctl -u opencode-slack-bot -f
 ```
+
+## Redeploying / updating an existing install
+
+When you pull new code onto a box that already runs the bot:
+
+```bash
+cd /opt/opencode-slack-bot
+
+# Pull updated code (however you ship it — git, rsync, scp, etc.)
+git pull           # or your equivalent
+
+# Rebuild
+npm ci
+npm run build
+
+# If the systemd unit changed, refresh it:
+sudo cp systemd/opencode-slack-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# Restart and tail logs
+sudo systemctl restart opencode-slack-bot
+sudo journalctl -u opencode-slack-bot -f
+```
+
+**Schema migrations run automatically** on startup. Each migration is wrapped in a transaction and the version is recorded in the `schema_version` table, so a botched start won't leave the DB half-applied. The shutdown path also writes a `state.db.backup` next to `state.db` before closing — restore by stopping the service, replacing `state.db`, and starting again.
+
+If the bot crashes immediately on start, the most common causes (in order):
+- `DATA_DIR` is relative or unwritable → fix the env file with an absolute writable path
+- Bot user can't read paths in `ALLOWED_REPOS` (often `/root/...`) → run as root or move/chown the repo
+- New Slack scopes added but the app wasn't reinstalled → reinstall the app to apply scope changes
+- The `/oc` slash command isn't registered → add it in api.slack.com/apps (no Request URL needed under Socket Mode)
 
 ## Migrating from `Soyuz0/opencode-slack`
 

@@ -38,6 +38,7 @@ export interface RunStreamArgs {
   repoOverride?: string | null;
   agentOverride?: string | null;
   modelOverride?: string | null;
+  opencodeSessionIdOverride?: string | null;
 }
 
 export interface RunStreamResult {
@@ -92,7 +93,11 @@ export function createRunStream(deps: RunStreamDeps): RunStream {
       if (current) {
         return { ...current, repoPath, lastActiveAt: startMs };
       }
-      return newSession(args.threadKey, args.userId, repoPath);
+      const fresh = newSession(args.threadKey, args.userId, repoPath);
+      if (args.opencodeSessionIdOverride) {
+        fresh.opencodeSessionId = args.opencodeSessionIdOverride;
+      }
+      return fresh;
     });
 
     if (session.totalCostUsd >= config.MAX_COST_PER_SESSION_USD) {
