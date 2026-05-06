@@ -1,0 +1,40 @@
+[Unit]
+Description=OpenCode Slack Bot
+Documentation=https://github.com/anthropics/claude-code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opencode-bot
+Group=opencode-bot
+WorkingDirectory=/opt/opencode-slack-bot
+
+# .env-style file with SLACK_*, ALLOWED_*, OPENCODE_BIN, DATA_DIR, etc.
+EnvironmentFile=/etc/opencode-slack-bot.env
+
+ExecStart=/usr/bin/node dist/index.js
+
+# Restart on crash but back off to avoid tight loops
+Restart=on-failure
+RestartSec=5
+
+# Send SIGTERM, then SIGKILL after 10s if still alive
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-slack-bot
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# DATA_DIR (typically /var/lib/opencode-slack-bot) must be writable
+ReadWritePaths=/var/lib/opencode-slack-bot
+
+[Install]
+WantedBy=multi-user.target
