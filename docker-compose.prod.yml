@@ -1,0 +1,25 @@
+services:
+  bot:
+    # Pin to a specific tag (e.g. 1.2.3) for stable deploys. `latest` follows main.
+    image: atul24112001/opencode-slack-bot:latest
+    pull_policy: always
+    container_name: opencode-slack-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      OPENCODE_BIN: /usr/local/bin/opencode
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - ./data:/data
+      - workspace:/workspace
+      - opencode_state:/home/node/.local/share/opencode
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  workspace:
+  opencode_state:

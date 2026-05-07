@@ -1,0 +1,22 @@
+services:
+  bot:
+    build: .
+    container_name: opencode-slack-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      OPENCODE_BIN: /usr/local/bin/opencode
+      WORKSPACE_DIR: /workspace
+    volumes:
+      # Bot's SQLite db + state. Bind mount so you can inspect ./data on the host.
+      - ./data:/data
+      # Cloned repos. Named volume — opencode's edits/commits persist across restarts.
+      - workspace:/workspace
+      # opencode local state (opencode.db, log/, storage/, auth.json). Named volume so
+      # opencode session ids referenced in the bot's db remain valid across restarts.
+      - opencode_state:/home/node/.local/share/opencode
+
+volumes:
+  workspace:
+  opencode_state:
